@@ -325,16 +325,15 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 7) {
-                Circle().fill(Color(red: 0.99, green: 0.38, blue: 0.36)).frame(width: 10, height: 10)
-                Circle().fill(Color(red: 0.98, green: 0.76, blue: 0.3)).frame(width: 10, height: 10)
-                Circle().fill(Color(red: 0.37, green: 0.8, blue: 0.48)).frame(width: 10, height: 10)
+                BrandIconView(workingCount: monitor.workingCount,
+                              completionNoticeUntil: monitor.completionNoticeUntil)
                 Spacer()
                 Text("agent-beacon — live").font(.system(size: 11, design: .monospaced)).foregroundStyle(muted)
                 Spacer()
                 Button { monitor.refresh() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).foregroundStyle(muted).help("刷新")
             }
-            .padding(.horizontal, 16).padding(.vertical, 13)
+            .padding(.horizontal, 16).padding(.vertical, 7)
             .background(panel)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -443,6 +442,60 @@ struct ContentView: View {
         .frame(width: 430)
         .background(background)
         .preferredColorScheme(.dark)
+    }
+}
+
+struct BrandIconView: View {
+    let workingCount: Int
+    let completionNoticeUntil: Date
+
+    private let icon: NSImage = {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let image = NSImage(contentsOf: url) { return image }
+        return NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+    }()
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.10)) { timeline in
+            BrandIconFrame(icon: icon,
+                           time: timeline.date.timeIntervalSinceReferenceDate,
+                           working: workingCount > 0,
+                           done: completionNoticeUntil > timeline.date)
+        }
+        .frame(width: 40, height: 40)
+        .accessibilityLabel("Agent 哨站图标")
+    }
+}
+
+struct BrandIconFrame: View {
+    let icon: NSImage
+    let time: TimeInterval
+    let working: Bool
+    let done: Bool
+
+    var body: some View {
+        let pulse = (sin(time * 3.0) + 1) / 2
+        let coral = Color(red: 1, green: 0.39, blue: 0.27)
+        let mint = Color(red: 0.43, green: 0.91, blue: 0.75)
+        ZStack {
+            Circle()
+                .stroke((done ? mint : coral).opacity(done ? 0.35 + 0.50 * pulse : 0.12 + 0.18 * pulse),
+                        lineWidth: 1.5)
+                .frame(width: 37, height: 37)
+            if working && !done {
+                Circle()
+                    .trim(from: 0, to: 0.28)
+                    .stroke(coral, style: StrokeStyle(lineWidth: 1.7, lineCap: .round))
+                    .frame(width: 37, height: 37)
+                    .rotationEffect(.degrees(time * 130))
+            }
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 31, height: 31)
+                .shadow(color: (done ? mint : coral).opacity(0.08 + 0.18 * pulse), radius: 3 + 2 * pulse)
+        }
+        .frame(width: 40, height: 40)
     }
 }
 

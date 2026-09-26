@@ -14,6 +14,10 @@
 
 点击菜单栏可打开深色终端风格窗口，查看当前任务、最近一步，以及执行命令或代码片段。菜单栏配色在应用内手动选择“浅色”或“深色”，默认深色；设置会保存。
 
+Finder 和 Launchpad 显示同款静态应用图标；窗口顶部使用这款图标呈现动态状态：空闲时外圈呼吸，Agent 工作时环形流动，任务完成后短暂亮起。
+
+![展开窗口的图标状态动画](previews/AgentBeacon-window-icon-animation.gif)
+
 ## 下载与使用
 
 1. 从 [Releases](https://github.com/liam13472409598-sudo/agent-beacon/releases) 下载 `AgentBeacon-app.zip`，解压并打开 `AgentBeacon.app`。应用只在菜单栏显示。
