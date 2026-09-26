@@ -488,6 +488,27 @@ enum StatusPixelAnimation {
         return render(text, frame: frame, mode: .done, palette: palette)
     }
 
+    static func idle(palette: Palette) -> NSImage {
+        let mark = ["..###..", ".##.##.", "##...##", "#######", "##...##", "##...##", "##...##"]
+        let color: NSColor = palette == .lightBar
+            ? NSColor(calibratedRed: 0.06, green: 0.22, blue: 0.30, alpha: 1)
+            : NSColor(calibratedRed: 0.68, green: 0.82, blue: 0.87, alpha: 1)
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            color.setFill()
+            for (row, pattern) in mark.enumerated() {
+                for (column, pixel) in pattern.enumerated() where pixel == "#" {
+                    NSRect(x: 1.65 + Double(column) * 2.1,
+                           y: 1.65 + Double(6 - row) * 2.1,
+                           width: 1.75, height: 1.75).fill()
+                }
+            }
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = "Agent 哨站"
+        return image
+    }
+
     static func pixels(for text: String) -> [(Int, Int)] {
         var points: [(Int, Int)] = []
         for (letterIndex, character) in text.lowercased().enumerated() {
@@ -573,7 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             button.action = #selector(togglePopover)
             button.target = self
-            button.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Agent 哨站")
+            button.image = StatusPixelAnimation.idle(palette: selectedPalette())
             button.imagePosition = .imageOnly
             button.imageScaling = .scaleNone
             button.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
@@ -606,7 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.setAccessibilityLabel("loading · \(monitor.workingCount)")
             frameIndex += 1
         } else {
-            button.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Agent 哨站")
+            button.image = StatusPixelAnimation.idle(palette: palette)
             button.attributedTitle = NSAttributedString(string: "")
             button.toolTip = "Agent 哨站：暂无运行中任务"
             button.setAccessibilityLabel("Agent 哨站：暂无运行中任务")

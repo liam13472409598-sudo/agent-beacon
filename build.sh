@@ -6,6 +6,7 @@ app_dir="$output_dir/AgentBeacon.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 swiftc -parse-as-library -O -target arm64-apple-macosx14.0 -framework AppKit -framework SwiftUI "$project_dir/AgentBeacon.swift" -o "$app_dir/Contents/MacOS/AgentBeacon"
 cp "$project_dir/agent_beacon_hook.py" "$project_dir/install_hooks.py" "$app_dir/Contents/Resources/"
+cp "$project_dir/assets/AppIcon.icns" "$app_dir/Contents/Resources/"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -15,8 +16,9 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.agentbeacon.app</string>
 <key>CFBundleExecutable</key><string>AgentBeacon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.8.0</string>
-<key>CFBundleVersion</key><string>8</string>
+<key>CFBundleIconFile</key><string>AppIcon.icns</string>
+<key>CFBundleShortVersionString</key><string>0.9.0</string>
+<key>CFBundleVersion</key><string>9</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
