@@ -2,11 +2,11 @@
 
 一个原生 macOS 菜单栏应用，显示 Codex、Cursor Agent 和 Claude Code 的本机任务状态。
 
-<img src="assets/AppIcon-1024.png" width="160" alt="Agent 哨站点阵 A 图标">
+<img src="assets/AppIcon-1024.png" width="160" alt="Agent 哨站终端光标图标">
 
-空闲时菜单栏显示点阵 A 图标，像素亮度从中心向外扩散。Agent 工作时，菜单栏用固定位置的像素点显示 `loading` 和运行数量，亮度沿文字横向流动；任务完成时显示约 8 秒的 `work done!`，亮度波改为纵向扫过。所有动画都只改变亮度，像素位置始终不移动。
+空闲时菜单栏显示终端提示符和呼吸闪烁的光标。Agent 工作时，菜单栏用固定位置的像素点显示 `loading` 和运行数量，亮度沿文字横向流动；任务完成时显示约 8 秒的 `work done!`，亮度波改为纵向扫过。动画只改变亮度，文字像素位置始终不移动。
 
-![点阵 A 菜单栏动画](previews/AgentBeacon-icon-animation.gif)
+![终端光标菜单栏动画](previews/AgentBeacon-icon-animation.gif)
 
 | 浅色菜单栏 | 深色菜单栏 |
 | --- | --- |

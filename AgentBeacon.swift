@@ -489,23 +489,25 @@ enum StatusPixelAnimation {
     }
 
     static func idle(frame: Int, palette: Palette) -> NSImage {
-        let mark = ["..###..", ".##.##.", "##...##", "#######", "##...##", "##...##", "##...##"]
-        let base: NSColor = palette == .lightBar
-            ? NSColor(calibratedRed: 0.24, green: 0.32, blue: 0.36, alpha: 1)
-            : NSColor(calibratedRed: 0.39, green: 0.50, blue: 0.54, alpha: 1)
-        let crest: NSColor = palette == .lightBar
-            ? NSColor(calibratedRed: 0.01, green: 0.12, blue: 0.16, alpha: 1)
-            : NSColor(calibratedRed: 0.83, green: 0.97, blue: 0.93, alpha: 1)
+        let prompt: NSColor = palette == .lightBar
+            ? NSColor(calibratedRed: 0.08, green: 0.15, blue: 0.25, alpha: 1)
+            : NSColor(calibratedRed: 0.85, green: 0.90, blue: 0.95, alpha: 1)
+        let cursor = NSColor(calibratedRed: 1, green: 0.37, blue: 0.25,
+                             alpha: idleBrightness(frame: frame))
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            for (row, pattern) in mark.enumerated() {
-                for (column, pixel) in pattern.enumerated() where pixel == "#" {
-                    let brightness = idleBrightness(column: column, row: row, frame: frame)
-                    (base.blended(withFraction: brightness, of: crest) ?? base).setFill()
-                    NSRect(x: 1.65 + Double(column) * 2.1,
-                           y: 1.65 + Double(6 - row) * 2.1,
-                           width: 1.75, height: 1.75).fill()
-                }
-            }
+            let chevron = NSBezierPath()
+            chevron.move(to: NSPoint(x: 2.5, y: 14.1))
+            chevron.line(to: NSPoint(x: 8.2, y: 9))
+            chevron.line(to: NSPoint(x: 2.5, y: 3.9))
+            chevron.lineWidth = 2.4
+            chevron.lineCapStyle = .round
+            chevron.lineJoinStyle = .round
+            prompt.setStroke()
+            chevron.stroke()
+            let cursorBlock = NSBezierPath(roundedRect: NSRect(x: 11.5, y: 3.8, width: 3.8, height: 10.4),
+                                           xRadius: 0.9, yRadius: 0.9)
+            cursor.setFill()
+            cursorBlock.fill()
             return true
         }
         image.isTemplate = false
@@ -513,10 +515,9 @@ enum StatusPixelAnimation {
         return image
     }
 
-    static func idleBrightness(column: Int, row: Int, frame: Int) -> Double {
-        let distance = hypot(Double(column - 3), Double(row - 1))
-        let ripple = (sin(Double(frame) * 0.22 - distance * 1.05) + 1) / 2
-        return 0.25 + 0.75 * pow(ripple, 2.5)
+    static func idleBrightness(frame: Int) -> Double {
+        let pulse = (sin(Double(frame) * 0.24) + 1) / 2
+        return 0.55 + 0.45 * pow(pulse, 1.8)
     }
 
     static func pixels(for text: String) -> [(Int, Int)] {

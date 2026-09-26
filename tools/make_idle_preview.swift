@@ -8,10 +8,10 @@ struct IdlePreview {
         _ = NSApplication.shared
         let output = CommandLine.arguments.dropFirst().first ?? "previews/AgentBeacon-icon-animation.gif"
         let url = URL(fileURLWithPath: output)
-        let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, 57, nil)!
+        let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, 52, nil)!
         CGImageDestinationSetProperties(destination,
             [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
-        for frame in 0..<57 {
+        for frame in 0..<52 {
             let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 100,
                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                 colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
