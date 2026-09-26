@@ -488,15 +488,19 @@ enum StatusPixelAnimation {
         return render(text, frame: frame, mode: .done, palette: palette)
     }
 
-    static func idle(palette: Palette) -> NSImage {
+    static func idle(frame: Int, palette: Palette) -> NSImage {
         let mark = ["..###..", ".##.##.", "##...##", "#######", "##...##", "##...##", "##...##"]
-        let color: NSColor = palette == .lightBar
-            ? NSColor(calibratedRed: 0.06, green: 0.22, blue: 0.30, alpha: 1)
-            : NSColor(calibratedRed: 0.68, green: 0.82, blue: 0.87, alpha: 1)
+        let base: NSColor = palette == .lightBar
+            ? NSColor(calibratedRed: 0.24, green: 0.32, blue: 0.36, alpha: 1)
+            : NSColor(calibratedRed: 0.39, green: 0.50, blue: 0.54, alpha: 1)
+        let crest: NSColor = palette == .lightBar
+            ? NSColor(calibratedRed: 0.01, green: 0.12, blue: 0.16, alpha: 1)
+            : NSColor(calibratedRed: 0.83, green: 0.97, blue: 0.93, alpha: 1)
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            color.setFill()
             for (row, pattern) in mark.enumerated() {
                 for (column, pixel) in pattern.enumerated() where pixel == "#" {
+                    let brightness = idleBrightness(column: column, row: row, frame: frame)
+                    (base.blended(withFraction: brightness, of: crest) ?? base).setFill()
                     NSRect(x: 1.65 + Double(column) * 2.1,
                            y: 1.65 + Double(6 - row) * 2.1,
                            width: 1.75, height: 1.75).fill()
@@ -507,6 +511,12 @@ enum StatusPixelAnimation {
         image.isTemplate = false
         image.accessibilityDescription = "Agent 哨站"
         return image
+    }
+
+    static func idleBrightness(column: Int, row: Int, frame: Int) -> Double {
+        let distance = hypot(Double(column - 3), Double(row - 1))
+        let ripple = (sin(Double(frame) * 0.22 - distance * 1.05) + 1) / 2
+        return 0.25 + 0.75 * pow(ripple, 2.5)
     }
 
     static func pixels(for text: String) -> [(Int, Int)] {
@@ -594,7 +604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             button.action = #selector(togglePopover)
             button.target = self
-            button.image = StatusPixelAnimation.idle(palette: selectedPalette())
+            button.image = StatusPixelAnimation.idle(frame: 0, palette: selectedPalette())
             button.imagePosition = .imageOnly
             button.imageScaling = .scaleNone
             button.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
@@ -627,10 +637,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.setAccessibilityLabel("loading · \(monitor.workingCount)")
             frameIndex += 1
         } else {
-            button.image = StatusPixelAnimation.idle(palette: palette)
+            button.image = StatusPixelAnimation.idle(frame: frameIndex, palette: palette)
             button.attributedTitle = NSAttributedString(string: "")
             button.toolTip = "Agent 哨站：暂无运行中任务"
             button.setAccessibilityLabel("Agent 哨站：暂无运行中任务")
+            frameIndex += 1
         }
     }
 
