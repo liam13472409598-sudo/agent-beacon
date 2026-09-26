@@ -1,0 +1,38 @@
+# Agent 哨站 · Agent Beacon
+
+一个原生 macOS 菜单栏应用，显示 Codex、Cursor Agent 和 Claude Code 的本机任务状态。
+
+Agent 工作时，菜单栏用固定位置的像素点显示 `loading` 和运行数量，亮度沿文字横向流动；任务完成时显示约 8 秒的 `work done!`，亮度波改为纵向扫过。文字轮廓和像素点位置始终不移动。
+
+| 浅色菜单栏 | 深色菜单栏 |
+| --- | --- |
+| ![浅色配色点阵动画](previews/AgentBeacon-light-preview.gif) | ![深色配色点阵动画](previews/AgentBeacon-dark-preview.gif) |
+
+点击菜单栏可打开深色终端风格窗口，查看当前任务、最近一步，以及执行命令或代码片段。菜单栏配色在应用内手动选择“浅色”或“深色”，默认深色；设置会保存。
+
+## 下载与使用
+
+1. 从 [Releases](https://github.com/liam13472409598-sudo/agent-beacon/releases) 下载 `AgentBeacon-app.zip`，解压并打开 `AgentBeacon.app`。应用只在菜单栏显示。
+2. Codex 会话从本机 `~/.codex/sessions` 读取。
+3. 在应用的“外观与接入”中点击“接入”，可为 Cursor Agent 和 Claude Code 安装用户级观察 Hook。接入前，应用仍可显示它们最近的本机会话，但不能可靠判断是否正在工作。
+
+当前 App 使用本机临时签名。若 macOS 阻止打开下载的 App，可以按下方步骤从源码在自己的 Mac 上构建；面向其他 Mac 的正式分发仍需开发者证书签名与公证。
+
+## 从源码构建
+
+需要 macOS 14 或更新版本，以及 Apple Command Line Tools。下载仓库后运行：
+
+```sh
+./build.sh
+open dist/AgentBeacon.app
+```
+
+`build.sh` 使用 SwiftUI 和 AppKit 编译 ARM64 版本，输出 `dist/AgentBeacon.app`。
+
+## 工作方式与隐私
+
+应用每 3 秒读取一次任务状态，工作动画持续循环。Codex 会话直接读取本机记录；Cursor Agent 和 Claude Code 的 Hook 只写入本机 `~/Library/Application Support/AgentBeacon/events.jsonl`，内容包括时间、会话 ID、简短标题、工具名，以及最多 8 行命令或代码片段。应用不会上传数据，Hook 不会改变 Agent 的执行结果。
+
+Claude 普通桌面聊天目前没有可用的任务事件接口；Claude Code 会话可以通过 Hook 显示实时状态。
+
+接入程序会在修改已有 `~/.cursor/hooks.json` 或 `~/.claude/settings.json` 前，于相同目录创建带 `.agent-beacon-日期.bak` 后缀的备份。要取消接入，删除这些设置中命令包含 `agent_beacon_hook.py` 的 Hook 项目即可。
