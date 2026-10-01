@@ -55,6 +55,7 @@ struct UsageWindow {
     var remainingPercent: Int { max(0, min(100, 100 - usedPercent)) }
     var name: String {
         guard let minutes = durationMinutes else { return "额度" }
+        if minutes == 10080 { return "week" }
         return minutes >= 1440 && minutes % 1440 == 0 ? "\(minutes / 1440)d" : "\(minutes / 60)h"
     }
     func isCurrent(at date: Date) -> Bool { resetsAt.map { $0 > date } ?? true }
@@ -65,10 +66,11 @@ struct UsageSnapshot {
     let windows: [UsageWindow]
     let fetchedAt: Date
 
-    func limitingWindow(at date: Date = Date()) -> UsageWindow? {
+    func window(for selection: String, at date: Date = Date()) -> UsageWindow? {
         guard date.timeIntervalSince(fetchedAt) < 300 else { return nil }
-        return windows.filter { $0.isCurrent(at: date) }
-            .min { $0.remainingPercent < $1.remainingPercent }
+        let minutes = selection == "5h" ? 300 : 10080
+        let match = windows.first { $0.durationMinutes == minutes }
+        return match?.isCurrent(at: date) == true ? match : nil
     }
 }
 
@@ -396,6 +398,7 @@ struct ContentView: View {
     @State private var showSetup = false
     @AppStorage("menuBarTheme") private var menuBarTheme = "dark"
     @AppStorage("idleUsageSource") private var idleUsageSource = "auto"
+    @AppStorage("usageWindow") private var usageWindow = "week"
     private let background = Color(red: 0.012, green: 0.022, blue: 0.035)
     private let panel = Color(red: 0.032, green: 0.058, blue: 0.083)
     private let muted = Color(red: 0.34, green: 0.45, blue: 0.53)
@@ -432,11 +435,21 @@ struct ContentView: View {
 
             Rectangle().fill(Color.white.opacity(0.09)).frame(height: 1)
             VStack(alignment: .leading, spacing: 7) {
-                Text("$ usage --remaining").foregroundStyle(green)
-                if let usage = monitor.codexUsage, let limiting = usage.limitingWindow() {
+                HStack {
+                    Text("$ usage --remaining").foregroundStyle(green)
+                    Spacer()
+                    Picker("额度周期", selection: $usageWindow) {
+                        Text("5 小时").tag("5h")
+                        Text("week").tag("week")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 140)
+                }
+                if let usage = monitor.codexUsage, let selected = usage.window(for: usageWindow) {
                     HStack(spacing: 10) {
                         Text("Codex").foregroundStyle(Color.white.opacity(0.9))
-                        Text("\(limiting.remainingPercent)% remaining · \(limiting.name)")
+                        Text("\(selected.remainingPercent)% remaining · \(selected.name)")
                             .foregroundStyle(green)
                         Spacer()
                         Text(usage.fetchedAt, style: .relative).foregroundStyle(muted)
@@ -779,12 +792,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !["auto", "codex", "claude", "cursor"].contains(UserDefaults.standard.string(forKey: "idleUsageSource") ?? "") {
             UserDefaults.standard.set("auto", forKey: "idleUsageSource")
         }
+        if !["5h", "week"].contains(UserDefaults.standard.string(forKey: "usageWindow") ?? "") {
+            UserDefaults.standard.set("week", forKey: "usageWindow")
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.action = #selector(togglePopover)
             button.target = self
-            button.image = StatusPixelAnimation.idle(frame: 0, palette: selectedPalette())
-            button.imagePosition = .imageOnly
+            button.image = nil
+            button.imagePosition = .noImage
             button.imageScaling = .scaleNone
             button.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
         }
@@ -818,10 +834,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.setAccessibilityLabel("loading · \(monitor.workingCount)")
             frameIndex += 1
         } else {
-            button.image = StatusPixelAnimation.idle(frame: frameIndex, palette: palette)
-            button.imagePosition = .imageLeft
+            button.image = nil
+            button.imagePosition = .noImage
             let selection = UserDefaults.standard.string(forKey: "idleUsageSource") ?? "auto"
-            let window = ["auto", "codex"].contains(selection) ? monitor.codexUsage?.limitingWindow() : nil
+            let usageWindow = UserDefaults.standard.string(forKey: "usageWindow") ?? "week"
+            let window = ["auto", "codex"].contains(selection) ? monitor.codexUsage?.window(for: usageWindow) : nil
             let label: String
             switch selection {
             case "claude": label = "Claude —"
@@ -833,12 +850,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ? NSColor(calibratedRed: 0.06, green: 0.18, blue: 0.24, alpha: 1)
                 : NSColor(calibratedRed: 0.74, green: 0.87, blue: 0.91, alpha: 1)
             button.attributedTitle = NSAttributedString(
-                string: " \(label)",
+                string: label,
                 attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
                              .foregroundColor: color])
             button.toolTip = ["claude", "cursor"].contains(selection)
                 ? "\(selection == "claude" ? "Claude Code" : "Cursor") 订阅额度暂不可读取"
-                : (window == nil ? "Agent 哨站：\(monitor.usageError)" : "Codex 订阅额度剩余；显示剩余更少的窗口")
+                : (window == nil ? "Agent 哨站：\(monitor.usageError.isEmpty ? "所选周期暂无最新额度" : monitor.usageError)" : "Codex \(usageWindow) 订阅额度剩余")
             button.setAccessibilityLabel("Agent 哨站：\(label)")
             frameIndex += 1
         }
