@@ -62,7 +62,7 @@ def main():
     try:
         deadline = time.monotonic() + 10
         send(process, {"id": 1, "method": "initialize", "params": {
-            "clientInfo": {"name": "agent-beacon", "version": "0.15.0"}}})
+            "clientInfo": {"name": "agent-beacon", "version": "0.16.0"}}})
         response, pending = read_response(process, 1, deadline, b"")
         if "error" in response:
             return {"error": "Codex 连接失败"}

@@ -4,7 +4,7 @@ project_dir="${0:A:h}"
 output_dir="${AGENT_BEACON_OUTPUT_DIR:-$project_dir/dist}"
 app_dir="$output_dir/AgentBeacon.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
-swiftc -parse-as-library -O -target arm64-apple-macosx14.0 -framework AppKit -framework SwiftUI "$project_dir/AgentBeacon.swift" -o "$app_dir/Contents/MacOS/AgentBeacon"
+swiftc -parse-as-library -O -target arm64-apple-macosx14.0 -framework AppKit -framework SwiftUI -framework CoreServices "$project_dir/AgentBeacon.swift" "$project_dir/ActivityStore.swift" -o "$app_dir/Contents/MacOS/AgentBeacon"
 cp "$project_dir/agent_beacon_hook.py" "$project_dir/install_hooks.py" "$project_dir/codex_usage.py" "$app_dir/Contents/Resources/"
 cp "$project_dir/assets/AppIcon.icns" "$app_dir/Contents/Resources/"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
@@ -17,8 +17,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>AgentBeacon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
-<key>CFBundleShortVersionString</key><string>0.15.0</string>
-<key>CFBundleVersion</key><string>15</string>
+<key>CFBundleShortVersionString</key><string>0.16.0</string>
+<key>CFBundleVersion</key><string>16</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

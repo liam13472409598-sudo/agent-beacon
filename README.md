@@ -41,9 +41,17 @@ open dist/AgentBeacon.app
 
 `build.sh` 使用 SwiftUI 和 AppKit 编译 ARM64 版本，输出 `dist/AgentBeacon.app`。
 
+## 验证日志读取
+
+```sh
+./tests/run.sh
+```
+
+覆盖日志追加、分段 UTF-8、文件截断与替换、任务完成与重新开始、Hook 会话、过期状态以及文件监听。加上 `--benchmark-local` 可只读测量本机日志的首次加载和后续刷新读取量。
+
 ## 工作方式与隐私
 
-应用每 3 秒读取一次任务状态、每 60 秒通过本机 Codex CLI 查询一次额度，工作动画持续循环。Codex 会话直接读取本机记录；Cursor Agent 和 Claude Code 的 Hook 只写入本机 `~/Library/Application Support/AgentBeacon/events.jsonl`，内容包括时间、会话 ID、简短标题、工具名，以及最多 8 行命令或代码片段。应用自身不会上传任务数据，Hook 不会改变 Agent 的执行结果。
+应用监听本机会话日志变化，只读取新增内容；日志没有变化时复用已解析的任务状态，界面也只在内容或状态变化时更新。每 3 秒轻量核对文件信息和任务过期状态，每 60 秒兜底发现新会话目录；Codex 额度仍每 60 秒通过本机 CLI 查询一次，工作动画持续循环。Codex 会话直接读取本机记录；Cursor Agent 和 Claude Code 的 Hook 只写入本机 `~/Library/Application Support/AgentBeacon/events.jsonl`，内容包括时间、会话 ID、简短标题、工具名，以及最多 8 行命令或代码片段。应用自身不会上传任务数据，Hook 不会改变 Agent 的执行结果。
 
 Claude 普通桌面聊天目前没有可用的任务事件接口；Claude Code 会话可以通过 Hook 显示实时状态。
 

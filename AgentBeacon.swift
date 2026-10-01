@@ -18,7 +18,7 @@ enum AgentState: String {
     }
 }
 
-struct AgentActivity: Identifiable {
+struct AgentActivity: Identifiable, Equatable {
     let id: String
     let source: String
     let title: String
@@ -29,12 +29,15 @@ struct AgentActivity: Identifiable {
     let log: [ActivityLine]
 }
 
-struct ActivityLine: Identifiable {
-    enum Kind { case text, code }
+struct ActivityLine: Identifiable, Equatable {
+    enum Kind: Equatable { case text, code }
     let id = UUID()
     let kind: Kind
     let value: String
     let date: Date
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kind == rhs.kind && lhs.value == rhs.value && lhs.date == rhs.date
+    }
 }
 
 struct HookEvent {
@@ -89,31 +92,36 @@ final class Monitor: ObservableObject {
     private var usageRefreshInProgress = false
     private var lastUsageRefresh: Date = .distantPast
     private let home: URL
+    private let store: ActivityStore
+    private let activityQueue = DispatchQueue(label: "local.agentbeacon.activity-reader", qos: .utility)
+    private var fileObserver: ActivityFileObserver?
+    private var activityRefreshInProgress = false
+    private var activityRefreshPending = false
+    private var needsDiscovery = true
 
     init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.home = home
+        self.store = ActivityStore(home: home)
+        fileObserver = ActivityFileObserver(home: home) { [weak self] rediscover in
+            self?.refresh(rediscover: rediscover)
+        }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }
     }
 
     var workingCount: Int { activities.filter { $0.state == .working }.count }
 
-    func refresh() {
+    func refresh(rediscover: Bool = false) {
         refreshUsage()
+        needsDiscovery = needsDiscovery || rediscover
+        guard !activityRefreshInProgress else { activityRefreshPending = true; return }
+        activityRefreshInProgress = true
+        let discover = needsDiscovery
+        needsDiscovery = false
         let home = self.home
-        DispatchQueue.global(qos: .utility).async {
-            let codex = Self.codexActivities(at: home)
-            let hooks = Self.hookActivities(at: home)
-            let cursor = Self.cursorFallback(at: home)
-            let claude = Self.claudeFallback(at: home)
-            var all = codex + hooks
-            if !hooks.contains(where: { $0.source == "Cursor" }) { all += cursor }
-            if !hooks.contains(where: { $0.source == "Claude Code" }) { all += claude }
-            all.sort { lhs, rhs in
-                if lhs.state == .working && rhs.state != .working { return true }
-                if rhs.state == .working && lhs.state != .working { return false }
-                return lhs.updated > rhs.updated
-            }
+        activityQueue.async { [weak self] in
+            guard let self = self else { return }
+            let all = self.store.snapshot(rediscover: discover)
             let cursorConfig = home.appendingPathComponent(".cursor/hooks.json")
             let claudeConfig = home.appendingPathComponent(".claude/settings.json")
             let cursorConnected = Self.containsBeaconHook(cursorConfig)
@@ -127,9 +135,15 @@ final class Monitor: ObservableObject {
                         self.completionNoticeUntil = Date().addingTimeInterval(8)
                     }
                 }
-                self.activities = Array(all.prefix(12))
-                self.cursorConnected = cursorConnected
-                self.claudeConnected = claudeConnected
+                let displayed = Array(all.prefix(12))
+                if self.activities != displayed { self.activities = displayed }
+                if self.cursorConnected != cursorConnected { self.cursorConnected = cursorConnected }
+                if self.claudeConnected != claudeConnected { self.claudeConnected = claudeConnected }
+                self.activityRefreshInProgress = false
+                if self.activityRefreshPending {
+                    self.activityRefreshPending = false
+                    self.refresh()
+                }
             }
         }
     }
@@ -204,193 +218,6 @@ final class Monitor: ObservableObject {
         return text.contains("agent_beacon_hook.py")
     }
 
-    private static func recentFiles(root: URL, suffix: String, limit: Int = 24) -> [URL] {
-        guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
-        var files: [(URL, Date)] = []
-        for case let url as URL in en where url.pathExtension == suffix {
-            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]), values.isRegularFile == true,
-                  let date = values.contentModificationDate, date > Date().addingTimeInterval(-24 * 3600) else { continue }
-            files.append((url, date))
-        }
-        return files.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
-    }
-
-    private static func lines(in url: URL, maxBytes: UInt64 = 900_000) -> [String] {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
-        defer { try? handle.close() }
-        let size = (try? handle.seekToEnd()) ?? 0
-        let start = size > maxBytes ? size - maxBytes : 0
-        try? handle.seek(toOffset: start)
-        let data = (try? handle.readToEnd()) ?? Data()
-        guard let text = String(data: data, encoding: .utf8) else { return [] }
-        var lines = text.components(separatedBy: .newlines)
-        if start > 0 && !lines.isEmpty { lines.removeFirst() }
-        return lines
-    }
-
-    private static func object(_ line: String) -> [String: Any]? {
-        guard let data = line.data(using: .utf8) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    private static func short(_ text: String, length: Int = 80) -> String {
-        let cleaned = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(cleaned.prefix(length))
-    }
-
-    private static func codeSnippet(_ text: String) -> String {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).prefix(8)
-        return String(lines.joined(separator: "\n").prefix(520)).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func callCode(_ payload: [String: Any]) -> String {
-        let raw = (payload["arguments"] as? String) ?? (payload["input"] as? String) ?? ""
-        if let data = raw.data(using: .utf8), let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-            for key in ["cmd", "command", "code", "input", "path"] {
-                if let value = object[key] as? String { return codeSnippet(value) }
-            }
-        }
-        return codeSnippet(raw)
-    }
-
-    private static func recentLog(_ lines: [ActivityLine]) -> [ActivityLine] {
-        Array(lines.suffix(6))
-    }
-
-    private static func contentText(_ value: Any?) -> String {
-        guard let parts = value as? [[String: Any]] else { return "" }
-        return parts.compactMap { $0["text"] as? String }.joined(separator: " ")
-    }
-
-    private static func codexActivities(at home: URL) -> [AgentActivity] {
-        let root = home.appendingPathComponent(".codex/sessions")
-        return recentFiles(root: root, suffix: "jsonl", limit: 16).compactMap { url in
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            var title = "Codex 任务"
-            var step = "正在思考"
-            var started: Date?
-            var ended: Date?
-            var lastEvent: Date = .distantPast
-            var sawTask = false
-            var log: [ActivityLine] = []
-            for line in lines(in: url, maxBytes: 8_000_000) {
-                guard let row = object(line), let payload = row["payload"] as? [String: Any] else { continue }
-                let date = formatter.date(from: row["timestamp"] as? String ?? "") ?? .distantPast
-                let outerType = row["type"] as? String ?? ""
-                let type = payload["type"] as? String ?? ""
-                if outerType == "event_msg" {
-                    if type == "task_started" {
-                        started = date; ended = nil; sawTask = true; step = "开始处理任务"; log = []
-                    }
-                    if type == "task_complete" || type == "turn_aborted" {
-                        ended = date; step = type == "task_complete" ? "已完成" : "已中止"
-                        log.append(ActivityLine(kind: .text, value: step, date: date))
-                    }
-                }
-                if outerType == "response_item" {
-                    if type == "message", payload["role"] as? String == "user" {
-                        let value = contentText(payload["content"])
-                        if !value.isEmpty && !value.hasPrefix("<") && !value.hasPrefix("[{") { title = short(value) }
-                    }
-                    if type == "message", payload["role"] as? String == "assistant", payload["phase"] as? String == "commentary" {
-                        let value = contentText(payload["content"])
-                        if !value.isEmpty {
-                            step = short(value)
-                            log.append(ActivityLine(kind: .text, value: short(value, length: 220), date: date))
-                        }
-                    }
-                    if type == "message", payload["role"] as? String == "assistant", payload["phase"] as? String == "final" {
-                        let value = contentText(payload["content"])
-                        if !value.isEmpty { log.append(ActivityLine(kind: .text, value: short(value, length: 220), date: date)) }
-                    }
-                    if type == "function_call" || type == "custom_tool_call" {
-                        let name = payload["name"] as? String ?? "工具"
-                        step = "调用 \(short(name, length: 45))"
-                        let code = callCode(payload)
-                        if !code.isEmpty { log.append(ActivityLine(kind: .code, value: code, date: date)) }
-                        else { log.append(ActivityLine(kind: .text, value: step, date: date)) }
-                    }
-                }
-                if date > lastEvent { lastEvent = date }
-            }
-            guard sawTask else { return nil }
-            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? lastEvent
-            let fresh = modified > Date().addingTimeInterval(-20 * 60)
-            let working = started != nil && ended == nil && fresh
-            return AgentActivity(id: url.lastPathComponent, source: "Codex", title: title,
-                                 step: working ? step : "最近一次任务已结束", state: working ? .working : .recent,
-                                 updated: modified, completedAt: ended, log: recentLog(log))
-        }
-    }
-
-    private static func hookActivities(at home: URL) -> [AgentActivity] {
-        let url = home.appendingPathComponent("Library/Application Support/AgentBeacon/events.jsonl")
-        var groups: [String: [HookEvent]] = [:]
-        for line in lines(in: url, maxBytes: 1_500_000) {
-            guard let o = object(line), let source = o["source"] as? String, let name = o["event"] as? String,
-                  let ts = o["timestamp"] as? Double else { continue }
-            let session = o["session"] as? String ?? "default"
-            let event = HookEvent(source: source, session: session, name: name, title: o["title"] as? String ?? "",
-                                  step: o["step"] as? String ?? "", code: o["code"] as? String ?? "",
-                                  date: Date(timeIntervalSince1970: ts))
-            groups["\(source):\(session)", default: []].append(event)
-        }
-        return groups.values.compactMap { events in
-            guard let last = events.last, last.date > Date().addingTimeInterval(-24 * 3600) else { return nil }
-            let title = events.reversed().first(where: { !$0.title.isEmpty })?.title ?? "\(last.source) 任务"
-            let stopNames = ["stop", "sessionEnd", "Stop", "SessionEnd"]
-            let started = events.reversed().first(where: { ["beforeSubmitPrompt", "UserPromptSubmit", "sessionStart", "SessionStart"].contains($0.name) })
-            let stopped = events.reversed().first(where: { stopNames.contains($0.name) })
-            let working = started != nil && (stopped == nil || started!.date > stopped!.date) && last.date > Date().addingTimeInterval(-20 * 60)
-            let step = last.step.isEmpty ? (working ? "正在处理任务" : "任务已结束") : last.step
-            let log = events.suffix(10).compactMap { event -> ActivityLine? in
-                if !event.code.isEmpty { return ActivityLine(kind: .code, value: codeSnippet(event.code), date: event.date) }
-                if !event.step.isEmpty { return ActivityLine(kind: .text, value: event.step, date: event.date) }
-                return nil
-            }
-            let completedAt = stopped?.name == "stop" || stopped?.name == "Stop" ? stopped?.date : nil
-            return AgentActivity(id: "\(last.source)-\(last.session)", source: last.source, title: title, step: step,
-                                 state: working ? .working : .recent, updated: last.date,
-                                 completedAt: working ? nil : completedAt, log: recentLog(log))
-        }
-    }
-
-    private static func cursorFallback(at home: URL) -> [AgentActivity] {
-        let root = home.appendingPathComponent(".cursor/projects")
-        guard let url = recentFiles(root: root, suffix: "jsonl", limit: 1).first else { return [] }
-        var title = "Cursor Agent"
-        var step = "最近有 Agent 会话"
-        var log: [ActivityLine] = []
-        for line in lines(in: url, maxBytes: 350_000) {
-            guard let o = object(line), let message = o["message"] as? [String: Any] else { continue }
-            let blocks = message["content"] as? [[String: Any]] ?? []
-            if o["role"] as? String == "user", let text = blocks.first(where: { $0["type"] as? String == "text" })?["text"] as? String { title = short(text) }
-            if o["role"] as? String == "assistant" {
-                if let tool = blocks.last(where: { $0["type"] as? String == "tool_use" }) {
-                    step = "调用 \(short(tool["name"] as? String ?? "工具"))"
-                    let input = tool["input"] as? [String: Any] ?? [:]
-                    let code = ["command", "cmd", "code", "file_path"].compactMap { input[$0] as? String }.first ?? ""
-                    if !code.isEmpty { log.append(ActivityLine(kind: .code, value: codeSnippet(code), date: .distantPast)) }
-                } else if let text = blocks.last(where: { $0["type"] as? String == "text" })?["text"] as? String {
-                    step = short(text)
-                    log.append(ActivityLine(kind: .text, value: short(text, length: 220), date: .distantPast))
-                }
-            }
-        }
-        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-        return [AgentActivity(id: "cursor-fallback", source: "Cursor", title: title, step: step, state: .recent,
-                              updated: date, completedAt: nil, log: recentLog(log))]
-    }
-
-    private static func claudeFallback(at home: URL) -> [AgentActivity] {
-        let root = home.appendingPathComponent(".claude/projects")
-        guard let url = recentFiles(root: root, suffix: "jsonl", limit: 1).first else { return [] }
-        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-        return [AgentActivity(id: "claude-fallback", source: "Claude Code", title: "最近的 Claude Code 会话",
-                              step: "接入后可显示实时状态", state: .recent, updated: date,
-                              completedAt: nil, log: [])]
-    }
 }
 
 struct ContentView: View {
