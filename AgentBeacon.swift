@@ -458,7 +458,7 @@ struct ContentView: View {
                     ForEach(usage.windows.indices, id: \.self) { index in
                         let window = usage.windows[index]
                         HStack(spacing: 8) {
-                            Text(window.name).frame(width: 24, alignment: .leading)
+                            Text(window.name).lineLimit(1).frame(width: 36, alignment: .leading)
                             Text("\(window.remainingPercent)% 剩余")
                             if let reset = window.resetsAt {
                                 Text("· \(reset, style: .relative)重置")
