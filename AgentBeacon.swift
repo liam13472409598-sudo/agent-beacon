@@ -399,6 +399,7 @@ struct ContentView: View {
     @AppStorage("menuBarTheme") private var menuBarTheme = "dark"
     @AppStorage("idleUsageSource") private var idleUsageSource = "auto"
     @AppStorage("usageWindow") private var usageWindow = "week"
+    @AppStorage("usageTextEffect") private var usageTextEffect = "shimmer"
     private let background = Color(red: 0.012, green: 0.022, blue: 0.035)
     private let panel = Color(red: 0.032, green: 0.058, blue: 0.083)
     private let muted = Color(red: 0.34, green: 0.45, blue: 0.53)
@@ -470,6 +471,26 @@ struct ContentView: View {
                 }
                 Text("Claude Code 和 Cursor 额度暂不可读取")
                     .foregroundStyle(muted)
+                Picker("额度文字效果", selection: $usageTextEffect) {
+                    ForEach(UsageTextEffect.allCases) { effect in
+                        Text(effect.title).tag(effect.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .help("菜单栏额度文字的像素亮度动画")
+                TimelineView(.animation(minimumInterval: 0.10)) { timeline in
+                    let window = monitor.codexUsage?.window(for: usageWindow)
+                    let text = idleUsageSource == "claude" ? "Claude —" :
+                        (idleUsageSource == "cursor" ? "Cursor —" :
+                            (window.map { "Codex \($0.remainingPercent)% · \($0.name)" } ?? "usage —"))
+                    Image(nsImage: StatusPixelAnimation.usage(
+                        text, frame: Int(timeline.date.timeIntervalSinceReferenceDate * 10),
+                        effect: UsageTextEffect(rawValue: usageTextEffect) ?? .shimmer,
+                        palette: .darkBar))
+                        .accessibilityLabel("额度文字效果预览")
+                }
+                .frame(maxWidth: .infinity, minHeight: 28)
             }
             .font(.system(size: 10, design: .monospaced))
             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -634,11 +655,31 @@ struct BrandIconFrame: View {
     }
 }
 
+enum UsageTextEffect: String, CaseIterable, Identifiable {
+    case shimmer, ripple, breathe, steady
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .shimmer: return "流光"
+        case .ripple: return "波纹"
+        case .breathe: return "呼吸"
+        case .steady: return "静态"
+        }
+    }
+}
+
 enum StatusPixelAnimation {
-    enum Mode { case loading, done }
+    enum Mode { case loading, done, usage(UsageTextEffect) }
     enum Palette { case lightBar, darkBar }
 
     private static let glyphs: [Character: [String]] = [
+        "c": [".....", ".####", "#....", "#....", "#....", ".####", "....."],
+        "h": ["#....", "#....", "####.", "#...#", "#...#", "#...#", "....."],
+        "s": [".....", ".####", "#....", ".###.", "....#", "####.", "....."],
+        "u": [".....", "#...#", "#...#", "#...#", "#...#", ".####", "....."],
+        "x": [".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "....."],
+        "%": ["##..#", "##..#", "...#.", "..#..", ".#...", "#..##", "#..##"],
+        "—": [".....", ".....", ".....", "#####", ".....", ".....", "....."],
         "l": [".##..", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."],
         "o": [".....", ".###.", "#...#", "#...#", "#...#", ".###.", "....."],
         "a": [".....", ".###.", "....#", ".####", "#...#", ".####", "....."],
@@ -674,6 +715,10 @@ enum StatusPixelAnimation {
     static func done(frame: Int, count: Int, palette: Palette) -> NSImage {
         let text = count > 0 ? "work done! · \(count) loading" : "work done!"
         return render(text, frame: frame, mode: .done, palette: palette)
+    }
+
+    static func usage(_ text: String, frame: Int, effect: UsageTextEffect, palette: Palette) -> NSImage {
+        render(text, frame: frame, mode: .usage(effect), palette: palette)
     }
 
     static func idle(frame: Int, palette: Palette) -> NSImage {
@@ -731,6 +776,21 @@ enum StatusPixelAnimation {
         case .done:
             let ripple = (sin(Double(frame) * 0.34 - Double(row) * 0.5) + 1) / 2
             return 0.06 + 0.94 * pow(ripple, 1.5)
+        case .usage(let effect):
+            let phase = Double(frame % 60) / 60 * 2 * Double.pi
+            switch effect {
+            case .shimmer:
+                let sweep = Double(frame % 60) / 60 * Double(columnCount + 36) - 18
+                let distance = (Double(column) - sweep - Double(row) * 0.65) / 9
+                return 0.30 + 0.70 * exp(-distance * distance / 2)
+            case .ripple:
+                let wave = (cos(Double(column) * 0.15 + Double(row) * 0.65 - phase) + 1) / 2
+                return 0.22 + 0.78 * pow(wave, 1.8)
+            case .breathe:
+                return 0.28 + 0.72 * pow((sin(phase) + 1) / 2, 1.4)
+            case .steady:
+                return 0.85
+            }
         }
     }
 
@@ -846,13 +906,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "codex": label = window.map { "Codex \($0.remainingPercent)% · \($0.name)" } ?? "Codex —"
             default: label = window.map { "Codex \($0.remainingPercent)% · \($0.name)" } ?? "usage —"
             }
-            let color: NSColor = palette == .lightBar
-                ? NSColor(calibratedRed: 0.06, green: 0.18, blue: 0.24, alpha: 1)
-                : NSColor(calibratedRed: 0.74, green: 0.87, blue: 0.91, alpha: 1)
-            button.attributedTitle = NSAttributedString(
-                string: label,
-                attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
-                             .foregroundColor: color])
+            let effect = UsageTextEffect(rawValue: UserDefaults.standard.string(forKey: "usageTextEffect") ?? "") ?? .shimmer
+            button.image = StatusPixelAnimation.usage(label, frame: frameIndex, effect: effect, palette: palette)
+            button.imagePosition = .imageOnly
+            button.attributedTitle = NSAttributedString(string: "")
             button.toolTip = ["claude", "cursor"].contains(selection)
                 ? "\(selection == "claude" ? "Claude Code" : "Cursor") 订阅额度暂不可读取"
                 : (window == nil ? "Agent 哨站：\(monitor.usageError.isEmpty ? "所选周期暂无最新额度" : monitor.usageError)" : "Codex \(usageWindow) 订阅额度剩余")
