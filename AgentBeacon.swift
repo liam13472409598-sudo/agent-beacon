@@ -47,16 +47,45 @@ struct HookEvent {
     let date: Date
 }
 
+struct UsageWindow {
+    let usedPercent: Int
+    let durationMinutes: Int?
+    let resetsAt: Date?
+
+    var remainingPercent: Int { max(0, min(100, 100 - usedPercent)) }
+    var name: String {
+        guard let minutes = durationMinutes else { return "额度" }
+        return minutes >= 1440 && minutes % 1440 == 0 ? "\(minutes / 1440)d" : "\(minutes / 60)h"
+    }
+    func isCurrent(at date: Date) -> Bool { resetsAt.map { $0 > date } ?? true }
+}
+
+struct UsageSnapshot {
+    let source: String
+    let windows: [UsageWindow]
+    let fetchedAt: Date
+
+    func limitingWindow(at date: Date = Date()) -> UsageWindow? {
+        guard date.timeIntervalSince(fetchedAt) < 300 else { return nil }
+        return windows.filter { $0.isCurrent(at: date) }
+            .min { $0.remainingPercent < $1.remainingPercent }
+    }
+}
+
 final class Monitor: ObservableObject {
     @Published var activities: [AgentActivity] = []
     @Published var cursorConnected = false
     @Published var claudeConnected = false
     @Published var message = ""
     @Published var completionNoticeUntil: Date = .distantPast
+    @Published var codexUsage: UsageSnapshot?
+    @Published var usageError = "正在读取 Codex 额度…"
 
     private var timer: Timer?
     private let launchedAt = Date()
     private var seenCompletions = Set<String>()
+    private var usageRefreshInProgress = false
+    private var lastUsageRefresh: Date = .distantPast
     private let home: URL
 
     init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
@@ -68,6 +97,7 @@ final class Monitor: ObservableObject {
     var workingCount: Int { activities.filter { $0.state == .working }.count }
 
     func refresh() {
+        refreshUsage()
         let home = self.home
         DispatchQueue.global(qos: .utility).async {
             let codex = Self.codexActivities(at: home)
@@ -99,6 +129,54 @@ final class Monitor: ObservableObject {
                 self.cursorConnected = cursorConnected
                 self.claudeConnected = claudeConnected
             }
+        }
+    }
+
+    func refreshUsage(force: Bool = false) {
+        guard !usageRefreshInProgress,
+              force || Date().timeIntervalSince(lastUsageRefresh) >= 60 else { return }
+        usageRefreshInProgress = true
+        lastUsageRefresh = Date()
+        DispatchQueue.global(qos: .utility).async {
+            let result = Self.readCodexUsage()
+            DispatchQueue.main.async {
+                self.codexUsage = result.0
+                self.usageError = result.1
+                self.usageRefreshInProgress = false
+            }
+        }
+    }
+
+    private static func readCodexUsage() -> (UsageSnapshot?, String) {
+        guard let helper = Bundle.main.resourceURL?.appendingPathComponent("codex_usage.py") else {
+            return (nil, "额度读取程序缺失")
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        task.arguments = [helper.path]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                return (nil, "Codex 额度读取失败")
+            }
+            if let error = object["error"] as? String { return (nil, error) }
+            let windows = ["primary", "secondary"].compactMap { key -> UsageWindow? in
+                guard let value = object[key] as? [String: Any],
+                      let used = value["usedPercent"] as? Int else { return nil }
+                let reset = (value["resetsAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+                return UsageWindow(usedPercent: used,
+                                   durationMinutes: value["windowDurationMins"] as? Int,
+                                   resetsAt: reset)
+            }
+            guard !windows.isEmpty else { return (nil, "Codex 未返回额度") }
+            return (UsageSnapshot(source: "Codex", windows: windows, fetchedAt: Date()), "")
+        } catch {
+            return (nil, "Codex 额度读取失败")
         }
     }
 
@@ -317,6 +395,7 @@ struct ContentView: View {
     @ObservedObject var monitor: Monitor
     @State private var showSetup = false
     @AppStorage("menuBarTheme") private var menuBarTheme = "dark"
+    @AppStorage("idleUsageSource") private var idleUsageSource = "auto"
     private let background = Color(red: 0.012, green: 0.022, blue: 0.035)
     private let panel = Color(red: 0.032, green: 0.058, blue: 0.083)
     private let muted = Color(red: 0.34, green: 0.45, blue: 0.53)
@@ -330,7 +409,7 @@ struct ContentView: View {
                 Spacer()
                 Text("agent-beacon — live").font(.system(size: 11, design: .monospaced)).foregroundStyle(muted)
                 Spacer()
-                Button { monitor.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                Button { monitor.refresh(); monitor.refreshUsage(force: true) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).foregroundStyle(muted).help("刷新")
             }
             .padding(.horizontal, 16).padding(.vertical, 7)
@@ -350,6 +429,37 @@ struct ContentView: View {
                     }
                 }.font(.system(size: 11, design: .monospaced))
             }.padding(.horizontal, 18).padding(.vertical, 16)
+
+            Rectangle().fill(Color.white.opacity(0.09)).frame(height: 1)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("$ usage --remaining").foregroundStyle(green)
+                if let usage = monitor.codexUsage, let limiting = usage.limitingWindow() {
+                    HStack(spacing: 10) {
+                        Text("Codex").foregroundStyle(Color.white.opacity(0.9))
+                        Text("\(limiting.remainingPercent)% remaining · \(limiting.name)")
+                            .foregroundStyle(green)
+                        Spacer()
+                        Text(usage.fetchedAt, style: .relative).foregroundStyle(muted)
+                    }
+                    ForEach(usage.windows.indices, id: \.self) { index in
+                        let window = usage.windows[index]
+                        HStack(spacing: 8) {
+                            Text(window.name).frame(width: 24, alignment: .leading)
+                            Text("\(window.remainingPercent)% 剩余")
+                            if let reset = window.resetsAt {
+                                Text("· \(reset, style: .relative)重置")
+                            }
+                        }.foregroundStyle(muted)
+                    }
+                } else {
+                    Text("Codex · \(monitor.usageError.isEmpty ? "额度已过期，等待刷新" : monitor.usageError)")
+                        .foregroundStyle(muted)
+                }
+                Text("Claude Code 和 Cursor 额度暂不可读取")
+                    .foregroundStyle(muted)
+            }
+            .font(.system(size: 10, design: .monospaced))
+            .padding(.horizontal, 18).padding(.vertical, 12)
 
             Rectangle().fill(Color.white.opacity(0.09)).frame(height: 1)
             ScrollView {
@@ -412,6 +522,18 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .padding(.bottom, 5)
+                    Text("# idle usage source").font(.system(size: 11, design: .monospaced)).foregroundStyle(green)
+                    Picker("待机额度来源", selection: $idleUsageSource) {
+                        Text("自动选择").tag("auto")
+                        Text("Codex").tag("codex")
+                        Text("Claude Code").tag("claude")
+                        Text("Cursor").tag("cursor")
+                    }
+                    .pickerStyle(.menu)
+                    Text("自动显示有可靠数据的 Agent；固定 Claude Code 或 Cursor 时，目前显示 —。")
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(muted)
+                        .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 5)
                     Text("# integrations").font(.system(size: 11, design: .monospaced)).foregroundStyle(green)
                     HStack {
@@ -654,6 +776,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !["light", "dark"].contains(UserDefaults.standard.string(forKey: "menuBarTheme") ?? "") {
             UserDefaults.standard.set("dark", forKey: "menuBarTheme")
         }
+        if !["auto", "codex", "claude", "cursor"].contains(UserDefaults.standard.string(forKey: "idleUsageSource") ?? "") {
+            UserDefaults.standard.set("auto", forKey: "idleUsageSource")
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.action = #selector(togglePopover)
@@ -680,21 +805,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if mode == "done" {
             button.image = StatusPixelAnimation.done(frame: frameIndex, count: monitor.workingCount, palette: palette)
+            button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
             button.toolTip = "Agent 任务完成"
             button.setAccessibilityLabel("work done! Agent 任务完成")
             frameIndex += 1
         } else if mode == "loading" {
             button.image = StatusPixelAnimation.loading(frame: frameIndex, count: monitor.workingCount, palette: palette)
+            button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
             button.toolTip = "\(monitor.workingCount) 个 Agent 正在工作"
             button.setAccessibilityLabel("loading · \(monitor.workingCount)")
             frameIndex += 1
         } else {
             button.image = StatusPixelAnimation.idle(frame: frameIndex, palette: palette)
-            button.attributedTitle = NSAttributedString(string: "")
-            button.toolTip = "Agent 哨站：暂无运行中任务"
-            button.setAccessibilityLabel("Agent 哨站：暂无运行中任务")
+            button.imagePosition = .imageLeft
+            let selection = UserDefaults.standard.string(forKey: "idleUsageSource") ?? "auto"
+            let window = ["auto", "codex"].contains(selection) ? monitor.codexUsage?.limitingWindow() : nil
+            let label: String
+            switch selection {
+            case "claude": label = "Claude —"
+            case "cursor": label = "Cursor —"
+            case "codex": label = window.map { "Codex \($0.remainingPercent)% · \($0.name)" } ?? "Codex —"
+            default: label = window.map { "Codex \($0.remainingPercent)% · \($0.name)" } ?? "usage —"
+            }
+            let color: NSColor = palette == .lightBar
+                ? NSColor(calibratedRed: 0.06, green: 0.18, blue: 0.24, alpha: 1)
+                : NSColor(calibratedRed: 0.74, green: 0.87, blue: 0.91, alpha: 1)
+            button.attributedTitle = NSAttributedString(
+                string: " \(label)",
+                attributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
+                             .foregroundColor: color])
+            button.toolTip = ["claude", "cursor"].contains(selection)
+                ? "\(selection == "claude" ? "Claude Code" : "Cursor") 订阅额度暂不可读取"
+                : (window == nil ? "Agent 哨站：\(monitor.usageError)" : "Codex 订阅额度剩余；显示剩余更少的窗口")
+            button.setAccessibilityLabel("Agent 哨站：\(label)")
             frameIndex += 1
         }
     }
